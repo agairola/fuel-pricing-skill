@@ -30,7 +30,9 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from functools import reduce
 from pathlib import Path
+from typing import Callable
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -77,9 +79,14 @@ PETROLSPY_FUEL_MAP = {
     "U95": "U95",
     "U98": "U98",
     "Diesel": "DSL",
+    "DIESEL": "DSL",
+    "diesel": "DSL",
+    "TruckDSL": "DSL",
     "PremDSL": "PDSL",
     "LPG": "LPG",
     "EV": "EV",
+    "E85": "E10",
+    "AdBlue": None,  # not a fuel type we track
 }
 
 
@@ -835,7 +842,9 @@ async def fetch_petrolspy(
 
         prices = {}
         for fuel_key, fuel_data in site.get("prices", {}).items():
-            code = PETROLSPY_FUEL_MAP.get(fuel_key, fuel_key)
+            code = PETROLSPY_FUEL_MAP.get(fuel_key)
+            if code is None:
+                continue  # unmapped or explicitly excluded
             if isinstance(fuel_data, dict) and fuel_data.get("amount"):
                 raw = float(fuel_data["amount"])
                 # PetrolSpy prices are in cents per litre (e.g., 178.9)
@@ -928,20 +937,74 @@ def _compute_staleness(updated_at: str) -> dict:
         return {"age_hours": None, "is_stale": False, "age_display": "unknown"}
 
 
-def _sanitize_prices(station: Station) -> Station:
-    """Filter out prices outside the sane range. Modifies station in-place."""
-    station.prices = {
+def _sanitize_prices(prices: dict[str, float | None]) -> dict[str, float | None]:
+    """Pure function: filter prices to sane range."""
+    return {
         code: price
-        for code, price in station.prices.items()
+        for code, price in prices.items()
         if price is not None and MIN_SANE_PRICE <= price <= MAX_SANE_PRICE
     }
-    if station.price_tomorrow:
-        station.price_tomorrow = {
-            code: price
-            for code, price in station.price_tomorrow.items()
-            if price is not None and MIN_SANE_PRICE <= price <= MAX_SANE_PRICE
+
+
+def sanitize_station(station: Station) -> Station:
+    """Pure function: return station with sanitized prices."""
+    return Station(
+        **{
+            **asdict(station),
+            "prices": _sanitize_prices(station.prices),
+            "price_tomorrow": (
+                _sanitize_prices(station.price_tomorrow)
+                if station.price_tomorrow
+                else None
+            ),
         }
-    return station
+    )
+
+
+def has_prices(station: Station) -> bool:
+    return bool(station.prices)
+
+
+def has_fuel_type(fuel_type: str) -> Callable[[Station], bool]:
+    """Return a predicate that checks if a station has the given fuel type."""
+    return lambda s: fuel_type in s.prices and s.prices[fuel_type] is not None
+
+
+def attach_staleness(station: Station) -> tuple[Station, dict]:
+    """Pure function: compute staleness for a station."""
+    return station, _compute_staleness(station.updated_at)
+
+
+def sort_key(sort_fuel: str, staleness_map: dict[int, dict]) -> Callable[[Station], tuple]:
+    """Return a sort key function: stale stations last, then by price, then distance."""
+    return lambda s: (
+        1 if staleness_map.get(id(s), {}).get("is_stale") else 0,
+        s.prices.get(sort_fuel) or 999,
+        s.distance_km or 999,
+    )
+
+
+def to_dict_with_staleness(staleness_map: dict[int, dict]) -> Callable[[Station], dict]:
+    """Return a function that converts a station to a dict with staleness info."""
+    return lambda s: {**asdict(s), "staleness": staleness_map.get(id(s), _compute_staleness(""))}
+
+
+def _default_sort_fuel(stations: list[Station]) -> str:
+    """Pick the most common fuel type to sort by."""
+    counts: dict[str, int] = reduce(
+        lambda acc, code: {**acc, code: acc.get(code, 0) + 1},
+        (code for s in stations for code, price in s.prices.items() if price is not None),
+        {},
+    )
+    return next(
+        (pref for pref in ("U91", "E10", "DSL") if pref in counts),
+        max(counts, key=counts.get) if counts else "U91",
+    )
+
+
+def pipe(data, *fns):
+    """Thread data through a sequence of functions."""
+    return reduce(lambda acc, fn: fn(acc), fns, data)
 
 
 async def fetch_prices(
@@ -952,65 +1015,35 @@ async def fetch_prices(
     import httpx
 
     async with httpx.AsyncClient() as client:
-        # Determine state
         state = location.state or _state_from_coords(location.lat, location.lng)
         location.state = state
 
-        adapters = STATE_ADAPTERS.get(state, [fetch_petrolspy])
-
-        # Try adapters in order. If the first returns results, use those.
-        # Otherwise fall through to the next.
-        all_stations: list[Station] = []
-        source_used = ""
-
-        for adapter in adapters:
-            try:
-                results = await adapter(client, location, radius_km)
-                if results:
-                    all_stations = results
-                    source_used = results[0].source if results else adapter.__name__
-                    break
-            except Exception:
-                continue
-
-        # Sanitize prices — remove insane values
-        all_stations = [_sanitize_prices(s) for s in all_stations]
-        all_stations = [s for s in all_stations if s.prices]  # drop stations with no valid prices
-
-        # Compute staleness for each station
-        staleness_map: dict[int, dict] = {}
-        stale_count = 0
-        for i, s in enumerate(all_stations):
-            stal = _compute_staleness(s.updated_at)
-            staleness_map[id(s)] = stal
-            if stal["is_stale"]:
-                stale_count += 1
-
-        # Filter by fuel type if specified
-        if fuel_type and all_stations:
-            all_stations = [
-                s for s in all_stations if fuel_type in s.prices and s.prices[fuel_type]
-            ]
-
-        # Sort by cheapest price, but penalize stale stations (push to bottom)
-        sort_fuel = fuel_type or _default_sort_fuel(all_stations)
-        all_stations.sort(
-            key=lambda s: (
-                1 if staleness_map.get(id(s), {}).get("is_stale") else 0,
-                s.prices.get(sort_fuel) or 999,
-                s.distance_km or 999,
-            )
+        # Try adapters in priority order until one returns results
+        all_stations, source_used = await _fetch_from_adapters(
+            client, state, location, radius_km
         )
 
-        # Cap at 10
-        top_stations = all_stations[:10]
+        # Functional pipeline: sanitize → filter → enrich → sort → cap → serialize
+        sanitized = pipe(
+            all_stations,
+            lambda ss: list(map(sanitize_station, ss)),
+            lambda ss: list(filter(has_prices, ss)),
+        )
 
-        # Build station dicts with staleness info
-        station_dicts = []
-        for s in top_stations:
-            d = asdict(s)
-            d["staleness"] = staleness_map.get(id(s), _compute_staleness(""))
-            station_dicts.append(d)
+        # Compute staleness as a parallel map, build lookup
+        staleness_pairs = list(map(attach_staleness, sanitized))
+        staleness_map = {id(s): stal for s, stal in staleness_pairs}
+        stale_count = sum(1 for _, stal in staleness_pairs if stal["is_stale"])
+
+        # Filter by fuel type, sort, cap, serialize
+        sort_fuel = fuel_type or _default_sort_fuel(sanitized)
+        station_dicts = pipe(
+            sanitized,
+            lambda ss: list(filter(has_fuel_type(fuel_type), ss)) if fuel_type else ss,
+            lambda ss: sorted(ss, key=sort_key(sort_fuel, staleness_map)),
+            lambda ss: ss[:10],
+            lambda ss: list(map(to_dict_with_staleness(staleness_map), ss)),
+        )
 
         result = {
             "location": {
@@ -1027,8 +1060,8 @@ async def fetch_prices(
                 "sort_by": sort_fuel,
             },
             "results": {
-                "count": len(top_stations),
-                "total_found": len(all_stations),
+                "count": len(station_dicts),
+                "total_found": len(sanitized),
                 "source": source_used,
                 "stations": station_dicts,
             },
@@ -1042,18 +1075,17 @@ async def fetch_prices(
         return result
 
 
-def _default_sort_fuel(stations: list[Station]) -> str:
-    """Pick the most common fuel type to sort by."""
-    counts: dict[str, int] = {}
-    for s in stations:
-        for code, price in s.prices.items():
-            if price is not None:
-                counts[code] = counts.get(code, 0) + 1
-    # Prefer U91 or E10 if available
-    for preferred in ["U91", "E10", "DSL"]:
-        if preferred in counts:
-            return preferred
-    return max(counts, key=counts.get) if counts else "U91"
+async def _fetch_from_adapters(client, state, location, radius_km):
+    """Try adapters in order, return first successful result."""
+    adapters = STATE_ADAPTERS.get(state, [fetch_petrolspy])
+    for adapter in adapters:
+        try:
+            results = await adapter(client, location, radius_km)
+            if results:
+                return results, results[0].source
+        except Exception:
+            continue
+    return [], ""
 
 
 # ---------------------------------------------------------------------------
