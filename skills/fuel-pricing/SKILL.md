@@ -13,55 +13,79 @@ description: >-
 
 # Fuel Pricing Skill
 
-Find the cheapest fuel at nearby stations across Australia.
+Find the cheapest fuel at nearby stations across Australia. Zero config — no API keys, no setup.
 
-## Philosophy: zero friction
+## When to Use
 
-No installs, no API keys, no config. Everything is handled silently.
+Trigger this skill when the user:
 
-- **uv** is needed. If missing: `brew install uv` (macOS) or `pip install uv`
-- **API keys** not needed. Free public APIs. Optional: `FUELCHECK_CONSUMER_KEY` for official NSW govt data.
-- **Dependencies** declared inline (PEP 723) — `uv run` installs them automatically.
+- Asks about fuel, petrol, diesel, or gas prices
+- Wants to compare prices at nearby stations
+- Mentions filling up, refueling, or finding a servo
+- Asks "where should I get fuel/petrol/diesel?"
+- Mentions a specific fuel type (E10, U91, U95, U98, diesel, LPG)
 
-## Location detection — fallback chain
+## Prerequisites
 
-The script resolves location with massive redundancy. Each level falls back to the next:
+- **uv** — `brew install uv` (macOS) or `pip install uv` (all platforms)
+- **API keys** — not needed. Optional: `FUELCHECK_CONSUMER_KEY` for official NSW govt data.
+- **Dependencies** — declared inline (PEP 723), installed automatically by `uv run`.
 
-1. **App / chat platform** — If the user shared location via Telegram, WhatsApp, Signal, Discord, etc., pass the lat/lng directly with `--lat`/`--lng`. If they typed a place name or postcode, use `--location` or `--postcode`. These go through Nominatim geocoding with IP fallback.
-2. **Browser consent flow** — When no location args are given (auto-detect), the script opens a localhost page requesting `navigator.geolocation` (WiFi triangulation, ~15-50ft accuracy). Cached 24hrs. Same pattern as `gh auth login`.
-3. **IP geolocation** — Final fallback via ip-api.com. City-level only, often inaccurate for non-city users.
-
-If all three fail, ask the user for their suburb or postcode.
-
-## Setup status
+## Setup Status
 
 !`command -v uv > /dev/null 2>&1 && echo "uv: installed" || echo "uv: NOT INSTALLED"`
 
-## Workflow
+## Quick Reference
 
-### Step 0: Ensure uv is available
+### Location Decision Tree
 
-If not installed: `brew install uv` (macOS) or `pip install uv` (all platforms)
+Pick the **first** matching option — do not prompt the user unnecessarily.
 
-### Step 1: Get prices
+| Priority | User provided | Flag to use | Example |
+|----------|--------------|-------------|---------|
+| 1 | Lat/lng (shared via chat platform) | `--lat -34.07 --lng 150.74` | Telegram location pin |
+| 2 | Suburb, city, or address | `--location "Newtown, NSW"` | "fuel near Newtown" |
+| 3 | Postcode | `--postcode 2042` | "fuel near 2042" |
+| 4 | Nothing (terminal user) | *(no args — auto-detect)* | "cheapest fuel nearby" |
+
+Auto-detect opens a browser consent page for GPS (cached 24hrs), then falls back to IP geolocation.
+
+### Command Template
 
 ```bash
-# Best: user shared location via chat platform
+uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" [LOCATION_FLAGS] [OPTIONS]
+```
+
+### Options
+
+| Flag | Values | Default | Purpose |
+|------|--------|---------|---------|
+| `--fuel-type` | `E10` `U91` `U95` `U98` `DSL` `PDSL` `LPG` | `U91` | Fuel type to search |
+| `--radius` | km (integer) | `5` | Search radius |
+| `--no-cache` | *(flag)* | off | Force fresh data |
+
+Only parse **stdout** (JSON). Stderr contains diagnostics only.
+
+### Common Commands
+
+```bash
+# User shared location via chat platform
 uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" --lat -34.07 --lng 150.74
 
-# User mentioned a place name or postcode
+# User mentioned a place or postcode
 uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" --location "Newtown, NSW"
 uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" --postcode 2042
 
-# Auto-detect (terminal — opens browser on first run)
+# Auto-detect location (terminal — opens browser on first run)
 uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py"
 
-# Options: --fuel-type E10|U91|U95|U98|DSL|PDSL|LPG  --radius 10  --no-cache
+# Specific fuel type + wider radius
+uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" --location "Parramatta" --fuel-type E10 --radius 10
 ```
 
-Stderr has diagnostics. Only parse stdout (JSON).
+## Presenting Results
 
-### Step 2: Present results
+### Output Format
 
 ```
 Cheapest [fuel type]: $[price]/L at [Station] ([distance] away, updated [freshness])
@@ -74,21 +98,44 @@ Cheapest [fuel type]: $[price]/L at [Station] ([distance] away, updated [freshne
 [N] stations within [radius]km of [location] · Source: [source]
 ```
 
-- Bold the cheapest row. Sort by price ascending (default U91 or E10).
-- Use `staleness.age_display` for the Updated column. Flag `is_stale` (>48hrs) with a note.
-- Stale stations are auto-sorted to the bottom.
-- Tomorrow's prices (WA only): add "Tomorrow: $X.XX".
-- Cap at 10 stations.
+### Formatting Rules
 
-### Step 3: Edge cases
+| Rule | Detail |
+|------|--------|
+| Sort order | Price ascending (cheapest first) |
+| Cheapest row | Bold station name and price |
+| Updated column | Use `staleness.age_display` from JSON |
+| Stale stations | Auto-sorted to bottom; flag with note if `is_stale` is true |
+| Tomorrow prices | WA only — append "Tomorrow: $X.XX" when available |
+| Max rows | Cap at 10 stations |
 
-- **Low confidence** (`confidence: "low"`): IP-only detection. Ask the user: "I detected [city] but that might not be exact. What suburb or postcode are you near?" On chat platforms, suggest they share location via the platform's location button. Rerun with `--location`, `--postcode`, or `--lat`/`--lng`.
-- **Stale prices**: `stale_count`/`stale_note` in JSON — mention to user. Stale stations pushed to bottom.
-- **Price sanity**: $0.50–$5.00/L range enforced. Out-of-range prices filtered automatically.
-- **No results**: Suggest `--radius 10` or a nearby suburb.
-- **API errors**: Multiple sources tried per state with auto-fallback. If all fail, suggest `--location`.
+## Handling Edge Cases
 
-## Data sources
+Listed by priority — handle the first applicable case.
+
+| Priority | Condition | JSON signal | Action |
+|----------|-----------|-------------|--------|
+| 1 | Low confidence location | `confidence: "low"` | Tell user: "I detected [city] but that might not be exact. What suburb or postcode are you near?" On chat platforms, suggest sharing location via the platform's location button. Rerun with explicit location. |
+| 2 | Stale prices | `stale_count > 0`, `stale_note` | Mention staleness to user. Stale stations already pushed to bottom. |
+| 3 | No results | empty stations array | Suggest `--radius 10` or ask for a nearby suburb. |
+| 4 | API errors | error in JSON | Multiple sources auto-fallback per state. If all fail, suggest `--location` with explicit suburb. |
+
+Price sanity ($0.50–$5.00/L) is enforced automatically — out-of-range prices are filtered by the script.
+
+## Reference
+
+### Fuel Types
+
+| Code | Name |
+|------|------|
+| E10 | Ethanol 10% |
+| U91 | Unleaded 91 |
+| U95 | Premium 95 |
+| U98 | Premium 98 |
+| DSL | Diesel |
+| LPG | LPG |
+
+### Data Sources
 
 | State | Primary | Fallback |
 |-------|---------|----------|
@@ -100,13 +147,10 @@ All data sources are read-only public APIs. FuelWatch is official Australian gov
 FuelSnoop and PetrolSpy are community data aggregators. No user data is sent to any service
 beyond coordinates for the search area.
 
-## Fuel types
+### Location Fallback Chain (internal)
 
-| Code | Name |
-|------|------|
-| E10 | Ethanol 10% |
-| U91 | Unleaded 91 |
-| U95 | Premium 95 |
-| U98 | Premium 98 |
-| DSL | Diesel |
-| LPG | LPG |
+The script resolves location automatically with this chain:
+
+1. **Explicit args** — `--lat`/`--lng`, `--location`, or `--postcode` (Nominatim geocoding)
+2. **Browser consent** — localhost page requesting `navigator.geolocation` (WiFi, ~15-50ft accuracy, cached 24hrs)
+3. **IP geolocation** — ip-api.com (city-level only, often inaccurate for non-city users)
