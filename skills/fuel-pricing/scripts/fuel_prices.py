@@ -90,6 +90,23 @@ PETROLSPY_FUEL_MAP = {
     "AdBlue": None,  # not a fuel type we track
 }
 
+# NSW FuelCheck API fuel codes → our codes
+FUELCHECK_FUEL_MAP = {
+    "E10": "E10",
+    "U91": "U91",
+    "P95": "U95",
+    "P98": "U98",
+    "DL": "DSL",
+    "PDL": "PDSL",
+    "LPG": "LPG",
+    "E85": "E10",
+    "B20": "DSL",
+    "EV": "EV",
+    "CNG": None,
+    "LNG": None,
+    "HYD": None,
+}
+
 
 @dataclass
 class Station:
@@ -700,6 +717,126 @@ async def fetch_fuelwatch(
     return list(merged.values())
 
 
+async def fetch_fuelcheck(
+    client: "httpx.AsyncClient", location: Location, radius_km: float
+) -> list[Station]:
+    """NSW FuelCheck official govt API — NSW, ACT, TAS. Requires env vars."""
+    consumer_key = os.environ.get("FUELCHECK_CONSUMER_KEY", "")
+    consumer_secret = os.environ.get("FUELCHECK_CONSUMER_SECRET", "")
+    if not consumer_key or not consumer_secret:
+        return []
+
+    import base64
+
+    # Step 1: Get OAuth2 access token
+    credentials = base64.b64encode(f"{consumer_key}:{consumer_secret}".encode()).decode()
+    try:
+        token_resp = await client.get(
+            "https://api.onegov.nsw.gov.au/oauth/client_credential/accesstoken",
+            params={"grant_type": "client_credentials"},
+            headers={"Authorization": f"Basic {credentials}"},
+            timeout=10,
+        )
+        if token_resp.status_code != 200:
+            print(f"FuelCheck token error: {token_resp.status_code}", file=sys.stderr)
+            return []
+        access_token = token_resp.json().get("access_token", "")
+        if not access_token:
+            return []
+    except Exception as e:
+        print(f"FuelCheck token exception: {e}", file=sys.stderr)
+        return []
+
+    # Step 2: Fetch nearby prices for each fuel type in parallel
+    # API requires one fuel type per request
+    fuel_types_to_query = ["E10", "U91", "P95", "P98", "DL", "PDL", "LPG"]
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "apikey": consumer_key,
+        "transactionid": str(int(time.time())),
+        "requesttimestamp": time.strftime("%d/%m/%Y %I:%M:%S %p"),
+    }
+    base_body = {
+        "latitude": str(location.lat),
+        "longitude": str(location.lng),
+        "radius": str(int(radius_km)),
+        "sortby": "price",
+        "sortascending": "true",
+    }
+
+    async def _fetch_one(fueltype: str) -> dict:
+        try:
+            resp = await client.post(
+                "https://api.onegov.nsw.gov.au/FuelPriceCheck/v2/fuel/prices/nearby",
+                headers=headers,
+                json={**base_body, "fueltype": fueltype},
+                timeout=15,
+            )
+            return resp.json() if resp.status_code == 200 else {}
+        except Exception:
+            return {}
+
+    results = await asyncio.gather(*[_fetch_one(ft) for ft in fuel_types_to_query])
+
+    # Step 3: Merge all responses — collect stations and prices across fuel types
+    station_lookup: dict[str, dict] = {}
+    prices_by_station: dict[str, dict[str, float]] = {}
+    updated_by_station: dict[str, str] = {}
+
+    for data in results:
+        for s in data.get("stations", []):
+            code = str(s.get("code", ""))
+            if code and code not in station_lookup:
+                station_lookup[code] = s
+
+        for p in data.get("prices", []):
+            scode = str(p.get("stationcode", ""))
+            fueltype = p.get("fueltype", "")
+            price_val = p.get("price")
+            if not scode or not fueltype or price_val is None:
+                continue
+            our_code = FUELCHECK_FUEL_MAP.get(fueltype)
+            if our_code is None:
+                continue
+            # FuelCheck prices are in cents/L
+            prices_by_station.setdefault(scode, {})[our_code] = round(float(price_val) / 100, 3)
+            lastupdated = p.get("lastupdated", "")
+            if lastupdated:
+                updated_by_station[scode] = lastupdated
+
+    # Step 4: Build Station objects
+    stations = []
+    for scode, price_map in prices_by_station.items():
+        sinfo = station_lookup.get(scode, {})
+        lat = float(sinfo.get("location", {}).get("latitude", 0))
+        lng = float(sinfo.get("location", {}).get("longitude", 0))
+        if lat == 0 and lng == 0:
+            continue
+        dist = haversine_km(location.lat, location.lng, lat, lng)
+        if dist > radius_km:
+            continue
+
+        stations.append(
+            Station(
+                name=sinfo.get("name", "Unknown"),
+                brand=sinfo.get("brand", ""),
+                address=sinfo.get("address", ""),
+                suburb=sinfo.get("suburb", ""),
+                state=sinfo.get("state", "NSW"),
+                postcode=sinfo.get("postcode", ""),
+                lat=lat,
+                lng=lng,
+                prices=price_map,
+                updated_at=updated_by_station.get(scode, ""),
+                source="FuelCheck",
+                distance_km=round(dist, 1),
+            )
+        )
+    print(f"FuelCheck returned {len(stations)} stations", file=sys.stderr)
+    return stations
+
+
 async def fetch_fuelsnoop(
     client: "httpx.AsyncClient", location: Location, radius_km: float
 ) -> list[Station]:
@@ -886,10 +1023,10 @@ async def fetch_petrolspy(
 # State -> which adapters to try, in priority order
 STATE_ADAPTERS = {
     "WA": [fetch_fuelwatch, fetch_petrolspy],
-    "NSW": [fetch_fuelsnoop, fetch_petrolspy],
-    "ACT": [fetch_fuelsnoop, fetch_petrolspy],
+    "NSW": [fetch_fuelcheck, fetch_fuelsnoop, fetch_petrolspy],
+    "ACT": [fetch_fuelcheck, fetch_fuelsnoop, fetch_petrolspy],
     "QLD": [fetch_fuelsnoop, fetch_petrolspy],
-    "TAS": [fetch_fuelsnoop, fetch_petrolspy],
+    "TAS": [fetch_fuelcheck, fetch_fuelsnoop, fetch_petrolspy],
     "VIC": [fetch_petrolspy],
     "SA": [fetch_petrolspy],
     "NT": [fetch_petrolspy],
@@ -1092,7 +1229,8 @@ async def _fetch_from_adapters(client, state, location, radius_km):
             results = await adapter(client, location, radius_km)
             if results:
                 return results, results[0].source
-        except Exception:
+        except Exception as e:
+            print(f"{adapter.__name__} failed: {e}", file=sys.stderr)
             continue
     return [], ""
 

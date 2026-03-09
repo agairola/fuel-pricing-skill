@@ -34,6 +34,7 @@ Trigger this skill when the user:
 ## Setup Status
 
 !`command -v uv > /dev/null 2>&1 && echo "uv: installed" || echo "uv: NOT INSTALLED"`
+!`test -n "$FUELCHECK_CONSUMER_KEY" && echo "FuelCheck API: configured (real-time govt data for NSW/ACT/TAS)" || echo "FuelCheck API: not configured (using community data — may be stale)"`
 
 ## Location Flow (IMPORTANT — follow this exactly)
 
@@ -192,11 +193,54 @@ Cheapest DSL near Oran Park:
 ## Handling Edge Cases
 
 - **Low confidence** (`confidence: "low"`): Do not silently show results. Tell the user: "I got an approximate location of [city] but it may not be exact. What suburb or postcode are you near?" Rerun with their answer.
-- **Stale prices** (`stale_count > 0`): Show results but add a note — "Heads up: some of these prices are a few days old and may have changed."
+- **Stale prices** (`stale_count > 0`): Show results but add a note — "Heads up: some of these prices are a few days old and may have changed." If this is the first query and FuelCheck is not configured, append the upgrade nudge (see below).
 - **No results** (empty stations): "No stations found within [radius]km. Want me to try a wider search or a different suburb?"
 - **API errors**: Multiple sources auto-fallback per state. If all fail: "Couldn't get prices right now. Can you try with a specific suburb name?"
 
 Price sanity ($0.50–$5.00/L) is enforced automatically — out-of-range prices are filtered by the script.
+
+## First Run: Upgrade Nudge
+
+After showing results for the **first time**, check if FuelCheck is configured. If not, append an upgrade suggestion to your response. This is a one-time nudge — don't repeat it on subsequent queries in the same conversation.
+
+**When to show:** The JSON response has `"source": "FuelSnoop"` or `"source": "PetrolSpy"` for NSW/ACT/TAS locations AND `stale_count > 0`.
+
+**What to say (adapt to tone, don't copy verbatim):**
+
+For platforms with hyperlinks:
+```
+Tip: Some of these prices are a few days old. For real-time government data, you can set up a free NSW FuelCheck API key (takes 2 minutes):
+
+1. Sign up at api.nsw.gov.au
+2. Subscribe to the "Fuel API" product (free)
+3. Then tell me your Consumer Key and Secret — I'll save them so future lookups use live data.
+```
+
+For platforms without hyperlinks:
+```
+Tip: Some prices may be outdated. You can get real-time data by setting up a free API key:
+
+1. Go to api.nsw.gov.au and sign up
+2. Subscribe to "Fuel API" (free, 2 min)
+3. Share your Consumer Key and Secret with me — I'll save them for you.
+```
+
+**When the user provides keys**, save them to the shell profile:
+
+```bash
+# Add to ~/.zshrc (macOS) or ~/.bashrc (Linux)
+echo 'export FUELCHECK_CONSUMER_KEY="<key>"' >> ~/.zshrc
+echo 'export FUELCHECK_CONSUMER_SECRET="<secret>"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Then confirm: "Keys saved. Future fuel price lookups will use real-time government data for NSW, ACT, and Tasmania."
+
+**Do NOT show the nudge if:**
+- FuelCheck is already configured (check setup status above)
+- The user is in WA (FuelWatch is already govt data and free)
+- The user is in VIC/SA/NT/QLD (FuelCheck doesn't cover these states)
+- You've already shown the nudge in this conversation
 
 ## Reference
 
