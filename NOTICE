@@ -1,0 +1,29 @@
+Fuel Pricing Skill
+Copyright 2026 agairola
+
+This product includes data from the following third-party sources:
+
+FuelWatch (Western Australia)
+  Provider: Department of Mines, Industry Regulation and Safety, Government of Western Australia
+  License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  URL: https://www.fuelwatch.wa.gov.au
+
+OpenStreetMap / Nominatim (geocoding)
+  Provider: OpenStreetMap contributors
+  License: Open Database License (ODbL 1.0)
+  URL: https://www.openstreetmap.org/copyright
+
+ip-api.com (IP geolocation fallback)
+  Provider: ip-api.com
+  License: Free for non-commercial use only
+  URL: https://ip-api.com
+
+FuelSnoop (NSW/QLD fuel prices)
+  Provider: FuelSnoop
+  License: No published terms
+  URL: https://www.fuelsnoop.com.au
+
+PetrolSpy (fuel prices fallback)
+  Provider: PetrolSpy
+  License: Proprietary — terms of use at https://petrolspy.com.au/termsofuse.html
+  URL: https://petrolspy.com.au
