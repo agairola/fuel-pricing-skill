@@ -1,0 +1,9 @@
+{
+  "name": "fuel-pricing-skill",
+  "description": "Find cheapest fuel prices near you across Australia — works in any chat platform",
+  "version": "1.0.0",
+  "author": {"name": "agairola"},
+  "repository": "https://github.com/agairola/fuel-pricing-skill",
+  "license": "MIT",
+  "keywords": ["fuel", "petrol", "australia", "prices", "location"]
+}
