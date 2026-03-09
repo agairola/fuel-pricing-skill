@@ -1418,8 +1418,9 @@ async def main() -> None:
 
     args = parse_args()
 
-    # Check cache
-    cache_key = f"prices_{args.location}_{args.postcode}_{args.lat}_{args.lng}_{args.fuel_type}_{args.radius}"
+    # Check cache — include credentials presence so adding/removing keys invalidates cache
+    has_creds = "1" if _get_credentials().get("fuelcheck_key") else "0"
+    cache_key = f"prices_{args.location}_{args.postcode}_{args.lat}_{args.lng}_{args.fuel_type}_{args.radius}_fc{has_creds}"
     if args.no_cache:
         # Clear both location and price cache
         loc_cache = CACHE_DIR / "location.json"
