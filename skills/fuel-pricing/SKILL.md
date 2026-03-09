@@ -35,20 +35,31 @@ Trigger this skill when the user:
 
 !`command -v uv > /dev/null 2>&1 && echo "uv: installed" || echo "uv: NOT INSTALLED"`
 
-## Quick Reference
+## Location Flow (IMPORTANT — follow this exactly)
 
-### Location Decision Tree
+Before fetching prices, you MUST resolve the user's location. Follow these steps in order — do NOT skip ahead to IP fallback.
 
-Pick the **first** matching option — do not prompt the user unnecessarily.
+**Step 1: Check what the user already provided.**
+- User shared a location pin (Telegram, WhatsApp, Signal, Discord)? Extract lat/lng → use `--lat` / `--lng`. Done.
+- User mentioned a suburb, city, or address? → use `--location`. Done.
+- User mentioned a postcode? → use `--postcode`. Done.
 
-| Priority | User provided | Flag to use | Example |
-|----------|--------------|-------------|---------|
-| 1 | Lat/lng (shared via chat platform) | `--lat -34.07 --lng 150.74` | Telegram location pin |
-| 2 | Suburb, city, or address | `--location "Newtown, NSW"` | "fuel near Newtown" |
-| 3 | Postcode | `--postcode 2042` | "fuel near 2042" |
-| 4 | Nothing (terminal user) | *(no args — auto-detect)* | "cheapest fuel nearby" |
+**Step 2: User said "near me" or "nearby" but gave no location.**
+Ask them to share location. Tailor the ask to their platform:
+- Telegram: "Tap the paperclip icon → Location → Send My Current Location"
+- WhatsApp: "Tap the + button → Location → Send Your Current Location"
+- Signal: "Tap the + button → Location"
+- Discord/terminal: "What suburb or postcode are you near?"
 
-Auto-detect opens a browser consent page for GPS (cached 24hrs), then falls back to IP geolocation.
+Wait for their response. Do not proceed without it.
+
+**Step 3: User can't or won't share location.**
+Ask: "No worries — what suburb or postcode are you near?" Wait for response.
+
+**Step 4: User refuses to give any location info.**
+Only now fall back to auto-detect (no location args). This uses IP geolocation which is city-level only and often wrong. If the result comes back with `confidence: "low"`, tell the user: "I got an approximate location of [city] from your IP but it may not be accurate. Can you tell me your suburb or postcode for better results?"
+
+**Never silently use IP geolocation when you can ask the user instead.**
 
 ### Command Template
 
@@ -85,40 +96,54 @@ uv run "${CLAUDE_SKILL_DIR}/scripts/fuel_prices.py" --location "Parramatta" --fu
 
 ## Presenting Results
 
+DO NOT use markdown tables. They don't render on mobile chat platforms (Telegram, WhatsApp, Signal). Use plain text with line breaks instead.
+
 ### Output Format
 
 ```
-Cheapest [fuel type]: $[price]/L at [Station] ([distance] away, updated [freshness])
+Cheapest [fuel type]: $[price]/L
+[Station name] · [distance] km · [freshness]
 
-| Station | [fuel types...] | Distance | Updated |
-|---------|----------------|----------|---------|
-| **[cheapest]** | **$X.XX** | X.X km | X min ago |
-| [others] | $X.XX | X.X km | X min ago |
+Nearby stations:
+1. [Station] — $[price]/L · [distance] km · [freshness]
+2. [Station] — $[price]/L · [distance] km · [freshness]
+3. [Station] — $[price]/L · [distance] km · [freshness]
 
-[N] stations within [radius]km of [location] · Source: [source]
+[N] stations within [radius]km of [location] · [source]
+```
+
+### Example
+
+```
+Cheapest U91: $2.17/L
+Ampol Smeaton Grange · 4.4 km · 6 hr ago
+
+Nearby stations:
+1. EG Ampol Oran Park — $2.19/L · 0.6 km · 6 days ago
+2. BP Bringelly — $2.19/L · 1.4 km · 3 days ago
+3. 7-Eleven Gregory Hills — $2.19/L · 3.7 km · 6 days ago
+4. Ampol Foodary Narellan — $2.19/L · 5.0 km · 6 days ago
+
+9 stations within 5km of Oran Park · FuelSnoop
 ```
 
 ### Formatting Rules
 
-| Rule | Detail |
-|------|--------|
-| Sort order | Price ascending (cheapest first) |
-| Cheapest row | Bold station name and price |
-| Updated column | Use `staleness.age_display` from JSON |
-| Stale stations | Auto-sorted to bottom; flag with note if `is_stale` is true |
-| Tomorrow prices | WA only — append "Tomorrow: $X.XX" when available |
-| Max rows | Cap at 10 stations |
+- Sort by price ascending (cheapest first)
+- Highlight the cheapest station at the top, separated from the numbered list
+- Use `staleness.age_display` from JSON for freshness
+- Stale stations (>48hrs): still show them but append a note at the bottom — "Some prices may be outdated"
+- WA tomorrow prices: add "Tomorrow: $X.XX" under the station
+- Cap at 10 stations
+- If user asked about a specific fuel type, show only that type
+- If no fuel type specified, default to U91 or E10
 
 ## Handling Edge Cases
 
-Listed by priority — handle the first applicable case.
-
-| Priority | Condition | JSON signal | Action |
-|----------|-----------|-------------|--------|
-| 1 | Low confidence location | `confidence: "low"` | Tell user: "I detected [city] but that might not be exact. What suburb or postcode are you near?" On chat platforms, suggest sharing location via the platform's location button. Rerun with explicit location. |
-| 2 | Stale prices | `stale_count > 0`, `stale_note` | Mention staleness to user. Stale stations already pushed to bottom. |
-| 3 | No results | empty stations array | Suggest `--radius 10` or ask for a nearby suburb. |
-| 4 | API errors | error in JSON | Multiple sources auto-fallback per state. If all fail, suggest `--location` with explicit suburb. |
+- **Low confidence** (`confidence: "low"`): Do not silently show results. Tell the user: "I got an approximate location of [city] but it may not be exact. What suburb or postcode are you near?" Rerun with their answer.
+- **Stale prices** (`stale_count > 0`): Show results but add a note — "Heads up: some of these prices are a few days old and may have changed."
+- **No results** (empty stations): "No stations found within [radius]km. Want me to try a wider search or a different suburb?"
+- **API errors**: Multiple sources auto-fallback per state. If all fail: "Couldn't get prices right now. Can you try with a specific suburb name?"
 
 Price sanity ($0.50–$5.00/L) is enforced automatically — out-of-range prices are filtered by the script.
 
@@ -147,10 +172,12 @@ All data sources are read-only public APIs. FuelWatch is official Australian gov
 FuelSnoop and PetrolSpy are community data aggregators. No user data is sent to any service
 beyond coordinates for the search area.
 
-### Location Fallback Chain (internal)
+### Script Location Fallback (internal — for reference only)
 
-The script resolves location automatically with this chain:
+When the script runs, it resolves location internally in this order:
 
 1. **Explicit args** — `--lat`/`--lng`, `--location`, or `--postcode` (Nominatim geocoding)
 2. **Browser consent** — localhost page requesting `navigator.geolocation` (WiFi, ~15-50ft accuracy, cached 24hrs)
 3. **IP geolocation** — ip-api.com (city-level only, often inaccurate for non-city users)
+
+The agent should almost never reach step 3. The Location Flow above ensures the user provides location info before the script runs.
