@@ -110,65 +110,84 @@ Use hyperlinks (not raw URLs) where the platform supports them:
 
 Provide **both** Google Maps and Apple Maps links so the user can choose.
 
-### Output Format
+### Two Response Modes
 
-For platforms that support hyperlinks (Telegram, Discord, terminal):
+**Default (no fuel type specified):** Show a compact summary — cheapest station per fuel type. Covers everyone in one small message.
+
+**Specific (user asked for a fuel type):** Show top 3–5 stations for that fuel type with map links.
+
+### Default: Multi-Fuel Summary
+
+Scan all stations and find the cheapest price for each fuel type available in the area. Show one line per fuel type. Only include the map link for the overall cheapest.
+
+For platforms with hyperlinks (Telegram, Discord, terminal):
 ```
-Cheapest [fuel type]: $[price]/L
-[Station Name](google_maps_url) · [distance] km · [freshness]
-Also on [Apple Maps](apple_maps_url)
+Cheapest fuel near [location]:
 
-Nearby stations:
-1. [Station Name](google_maps_url) — $[price]/L · [distance] km
+E10 — $2.17/L · [Ampol Smeaton Grange](google_maps_url) · 4.4 km
+U91 — $2.17/L · [Ampol Smeaton Grange](google_maps_url) · 4.4 km
+U95 — $2.31/L · [7-Eleven Gregory Hills](google_maps_url) · 3.7 km
+U98 — $2.39/L · [7-Eleven Gregory Hills](google_maps_url) · 3.7 km
+DSL — $2.19/L · [Ampol Smeaton Grange](google_maps_url) · 4.4 km
+LPG — $1.10/L · [Ampol Foodary Narellan](google_maps_url) · 5.0 km
+
+Ask me for more options on any fuel type.
+```
+
+For platforms without hyperlinks (WhatsApp, Signal, SMS):
+```
+Cheapest fuel near [location]:
+
+E10 — $2.17/L · Ampol Smeaton Grange · 4.4 km
+U91 — $2.17/L · Ampol Smeaton Grange · 4.4 km
+U95 — $2.31/L · 7-Eleven Gregory Hills · 3.7 km
+U98 — $2.39/L · 7-Eleven Gregory Hills · 3.7 km
+DSL — $2.19/L · Ampol Smeaton Grange · 4.4 km
+LPG — $1.10/L · Ampol Foodary Narellan · 5.0 km
+
+Reply with a fuel type for more stations + directions.
+```
+
+### Specific: Single Fuel Type Detail
+
+When the user asks for a specific type (e.g. "diesel near me", "cheapest E10"), show top stations for that type with map links.
+
+For platforms with hyperlinks:
+```
+Cheapest DSL near Oran Park:
+
+1. [Ampol Smeaton Grange](google_maps_url) — $2.19/L · 4.4 km · 6 hr ago
    [Apple Maps](apple_maps_url)
-2. [Station Name](google_maps_url) — $[price]/L · [distance] km
-   [Apple Maps](apple_maps_url)
+2. [Ampol Foodary Narellan](google_maps_url) — $2.16/L · 5.0 km · 6 days ago
+3. [EG Ampol Oran Park](google_maps_url) — $2.34/L · 0.6 km · 6 days ago
 
-[N] stations within [radius]km of [location] · [source]
+[N] stations within [radius]km · [source]
 ```
 
-For platforms without hyperlink support (WhatsApp, Signal, SMS):
+For platforms without hyperlinks:
 ```
-Cheapest [fuel type]: $[price]/L
-[Station Name] · [distance] km · [freshness]
-Google Maps: [google_maps_url]
-Apple Maps: [apple_maps_url]
+Cheapest DSL near Oran Park:
 
-Nearby stations:
-1. [Station Name] — $[price]/L · [distance] km
+1. Ampol Smeaton Grange — $2.19/L · 4.4 km · 6 hr ago
    Google Maps: [google_maps_url]
    Apple Maps: [apple_maps_url]
+2. Ampol Foodary Narellan — $2.16/L · 5.0 km · 6 days ago
+   Google Maps: [google_maps_url]
+3. EG Ampol Oran Park — $2.34/L · 0.6 km · 6 days ago
+   Google Maps: [google_maps_url]
 
-[N] stations within [radius]km of [location] · [source]
-```
-
-### Example (Telegram/Discord)
-
-```
-Cheapest U91: $2.17/L
-[Ampol Smeaton Grange](https://www.google.com/maps/search/?api=1&query=Ampol%20Smeaton%20Grange%2C%201%20DUNN%20RD%2C%20SMEATON%20GRANGE%20NSW%202567) · 4.4 km · 6 hr ago
-Also on [Apple Maps](https://maps.apple.com/?q=Ampol%20Smeaton%20Grange&ll=-34.032313,150.756161)
-
-Nearby stations:
-1. [EG Ampol Oran Park](https://www.google.com/maps/search/?api=1&query=...) — $2.19/L · 0.6 km
-   [Apple Maps](https://maps.apple.com/?q=EG%20Ampol%20Oran%20Park&ll=-33.999736,150.73839)
-2. [BP Bringelly](https://www.google.com/maps/search/?api=1&query=...) — $2.19/L · 1.4 km
-3. [7-Eleven Gregory Hills](https://www.google.com/maps/search/?api=1&query=...) — $2.19/L · 3.7 km
-
-9 stations within 5km of Oran Park · FuelSnoop
+[N] stations within [radius]km · [source]
 ```
 
 ### Formatting Rules
 
-- Sort by price ascending (cheapest first)
-- Highlight the cheapest station at the top, separated from the numbered list
-- Use `staleness.age_display` from JSON for freshness
-- Stale stations (>48hrs): still show them but append a note at the bottom — "Some prices may be outdated"
-- WA tomorrow prices: add "Tomorrow: $X.XX" under the station
-- Cap at 10 stations
-- If user asked about a specific fuel type, show only that type
-- If no fuel type specified, default to U91 or E10
-- Always show both Google Maps and Apple Maps for the cheapest station; for the rest, Google Maps is enough unless the user is on an Apple device
+- Default mode: one line per fuel type, cheapest station only, skip types with no data
+- Specific mode: top 3–5 stations, sorted by price ascending
+- Use `staleness.age_display` from JSON for freshness (specific mode only — keep default mode compact)
+- Stale prices: append a note at the bottom — "Some prices may be a few days old"
+- WA tomorrow prices: add "Tomorrow: $X.XX" after the current price
+- Both Google Maps and Apple Maps for the top station; Google Maps only for the rest
+- Invite follow-up: "Ask me for more options on any fuel type" or "Reply with a fuel type for more"
 
 ## Handling Edge Cases
 
