@@ -22,12 +22,9 @@ import argparse
 import asyncio
 import json
 import math
-import os
-import platform
-import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -698,7 +695,7 @@ def extract_latest_readings(
             })
 
             if not obs_time:
-                obs_time = obs.get("HourDescription", f"{hour:02d}:00-{hour+1:02d}:00")
+                obs_time = obs.get("HourDescription", f"{hour:02d}:00-{(hour + 1) % 24:02d}:00")
             if not obs_date:
                 obs_date = obs.get("Date", date.today().isoformat())
 
@@ -867,17 +864,15 @@ async def main() -> None:
                     suggestion="Try --site to query a specific monitoring station, or use --location with a Sydney suburb.",
                 )
 
-    # Flag IP-only detection so the agent knows accuracy is limited
-    if location.method in ("ip-api.com", "ip-fallback") and not (args.lat and args.lng):
-        location_confidence = "low"
-    else:
-        location_confidence = "high"
+        # Flag IP-only detection so the agent knows accuracy is limited
+        if location.method in ("ip-api.com", "ip-fallback") and not (args.lat and args.lng):
+            location_confidence = "low"
+        else:
+            location_confidence = "high"
 
-    # 3. Fetch observations
-    site_id = target_site["Site_Id"]
-    pollutants = [args.pollutant] if args.pollutant else ALL_POLLUTANTS
-
-    async with httpx.AsyncClient() as client:
+        # 3. Fetch observations
+        site_id = target_site["Site_Id"]
+        pollutants = [args.pollutant] if args.pollutant else ALL_POLLUTANTS
         observations = await fetch_observations(client, site_id, pollutants, no_cache=args.no_cache)
 
     if not observations:

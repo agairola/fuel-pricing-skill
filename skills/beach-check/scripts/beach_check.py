@@ -22,25 +22,15 @@ import argparse
 import asyncio
 import json
 import math
-import os
-import platform
-import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote_plus
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
-
-WATER_QUALITY_RATINGS = {
-    1: "Bad",
-    2: "Poor",
-    3: "Fair",
-    4: "Good",
-}
 
 STALENESS_THRESHOLD_DAYS = 7
 
@@ -54,22 +44,6 @@ class Location:
     postcode: str
     country: str
     method: str  # how we detected it
-
-
-@dataclass
-class Beach:
-    name: str
-    id: str
-    water_quality: str
-    water_quality_rating: int
-    pollution_forecast: str
-    pollution_forecast_time: str
-    observation_date: str
-    lat: float
-    lng: float
-    distance_km: float | None = None
-    stale: bool = False
-    stale_note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +680,7 @@ async def main() -> None:
     args = parse_args()
 
     # Cache key
-    cache_key = f"beach_data"
+    cache_key = "beach_data"
     if args.no_cache:
         # Clear both location and beach data cache
         loc_cache = CACHE_DIR / "location.json"
@@ -716,61 +690,58 @@ async def main() -> None:
         if data_cache.exists():
             data_cache.unlink()
 
-    # Fetch beach data (single GET, cached 1hr)
-    cached_data = None if args.no_cache else cache_get(cache_key)
-    if cached_data:
-        geojson = cached_data
-    else:
-        async with httpx.AsyncClient() as client:
-            geojson = await fetch_beach_data(client)
-        if not geojson:
-            print(json.dumps({"error": "Failed to fetch beach data from Beachwatch API."}))
-            sys.exit(1)
-        cache_set(cache_key, geojson)
-
-    features = geojson.get("features", [])
-    if not features:
-        print(json.dumps({"error": "No beach data available from Beachwatch API."}))
-        sys.exit(1)
-
-    # --beach mode: search by name
-    if args.beach:
-        matches, alternatives = match_beaches(args.beach, features)
-
-        if not matches:
-            print(json.dumps({
-                "error": f"No beaches found matching '{args.beach}'.",
-                "query": {"beach": args.beach, "mode": "beach_search"},
-            }))
-            sys.exit(1)
-
-        # Try to resolve location for context (non-critical)
-        location_info = {"city": "", "state": "NSW", "postcode": "", "lat": 0, "lng": 0, "method": "beach_search", "confidence": "high"}
-
-        # Use the matched beach's coordinates as reference
-        match_feature = matches[0]
-        match_coords = match_feature.get("geometry", {}).get("coordinates", [0, 0])
-        match_lat = match_coords[1]
-        match_lng = match_coords[0]
-
-        beach_results = [_feature_to_beach(f) for f in matches]
-        alt_results = [_feature_to_alternative(f, match_lat, match_lng) for f in alternatives]
-
-        result = {
-            "location": location_info,
-            "query": {"beach": args.beach, "mode": "beach_search"},
-            "results": {
-                "count": len(beach_results),
-                "beaches": beach_results,
-                "alternatives": alt_results,
-            },
-        }
-
-        print(json.dumps(result, indent=2, default=str))
-        return
-
-    # Nearby mode: resolve location first
     async with httpx.AsyncClient() as client:
+        # Fetch beach data (single GET, cached 1hr)
+        cached_data = None if args.no_cache else cache_get(cache_key)
+        if cached_data:
+            geojson = cached_data
+        else:
+            geojson = await fetch_beach_data(client)
+            if not geojson:
+                print(json.dumps({"error": "Failed to fetch beach data from Beachwatch API."}))
+                sys.exit(1)
+            cache_set(cache_key, geojson)
+
+        features = geojson.get("features", [])
+        if not features:
+            print(json.dumps({"error": "No beach data available from Beachwatch API."}))
+            sys.exit(1)
+
+        # --beach mode: search by name
+        if args.beach:
+            matches, alternatives = match_beaches(args.beach, features)
+
+            if not matches:
+                print(json.dumps({
+                    "error": f"No beaches found matching '{args.beach}'.",
+                    "query": {"beach": args.beach, "mode": "beach_search"},
+                }))
+                sys.exit(1)
+
+            # Use the matched beach's coordinates as reference
+            match_feature = matches[0]
+            match_coords = match_feature.get("geometry", {}).get("coordinates", [0, 0])
+            match_lat = match_coords[1]
+            match_lng = match_coords[0]
+
+            beach_results = [_feature_to_beach(f) for f in matches]
+            alt_results = [_feature_to_alternative(f, match_lat, match_lng) for f in alternatives]
+
+            location_info = {"city": "", "state": "NSW", "postcode": "", "lat": 0, "lng": 0, "method": "beach_search", "confidence": "high"}
+            result = {
+                "location": location_info,
+                "query": {"beach": args.beach, "mode": "beach_search"},
+                "results": {
+                    "count": len(beach_results),
+                    "beaches": beach_results,
+                    "alternatives": alt_results,
+                },
+            }
+
+            print(json.dumps(result, indent=2, default=str))
+            return
+
+        # Nearby mode: resolve location
         location = await location_from_args(args, client)
 
     if not location:

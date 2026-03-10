@@ -24,11 +24,9 @@ import asyncio
 import json
 import math
 import os
-import platform
-import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -604,15 +602,6 @@ def _calc_delay_min(planned: str | None, estimated: str | None) -> int | None:
     if not planned or not estimated:
         return None
     try:
-        from datetime import datetime
-
-        def _parse_dt(s: str) -> datetime:
-            # Handle ISO format with timezone
-            # Strip timezone for simple comparison
-            s = s.replace("+", "X").replace("-", "Y")
-            # Use a simpler approach
-            pass
-
         # Parse ISO datetimes
         p_time = _parse_iso_time(planned)
         e_time = _parse_iso_time(estimated)
@@ -753,7 +742,7 @@ async def fetch_trip(
                         or dest_info.get("arrivalTimePlanned")
                     ),
                     "duration_min": round(duration_sec / 60) if duration_sec else None,
-                    "stops": leg.get("stopSequence", []),
+                    "stops": 0,
                     "realtime": bool(
                         origin_info.get("departureTimeEstimated")
                         or dest_info.get("arrivalTimeEstimated")
@@ -767,14 +756,11 @@ async def fetch_trip(
                 else:
                     leg_info["stops"] = 0
 
-                # Apply transport filter
+                # Apply transport filter — skip entire journey if any non-walk leg doesn't match
                 if transport_filter:
                     allowed = TRANSPORT_FILTER.get(transport_filter, [])
                     if allowed and product_class not in allowed and not is_walk:
                         break
-                else:
-                    legs.append(leg_info)
-                    continue
 
                 legs.append(leg_info)
 
@@ -1076,7 +1062,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--transport", "-t",
-        choices=["train", "bus", "ferry", "lightrail", "metro"],
+        choices=["train", "bus", "ferry", "lightrail", "metro", "coach"],
         help="Filter by transport type",
     )
     parser.add_argument("--lat", type=float, help="Latitude")
