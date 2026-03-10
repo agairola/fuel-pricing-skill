@@ -1,9 +1,9 @@
 {
-  "name": "fuel-pricing-skill",
-  "description": "Find cheapest fuel prices near you across Australia — works in any chat platform",
+  "name": "life-skills",
+  "description": "A collection of personal life skills for AI agents",
   "version": "1.0.0",
   "author": {"name": "agairola"},
-  "repository": "https://github.com/agairola/fuel-pricing-skill",
-  "license": "MIT",
-  "keywords": ["fuel", "petrol", "australia", "prices", "location"]
+  "repository": "https://github.com/agairola/life-skills",
+  "license": "Apache-2.0",
+  "keywords": ["skills", "personal", "fuel", "australia"]
 }
