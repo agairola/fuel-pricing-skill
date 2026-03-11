@@ -124,47 +124,55 @@ DO NOT use markdown tables. They don't render on mobile chat platforms (Telegram
 
 ### Trip Mode
 
-Show numbered journey options with legs as arrow-separated steps. Keep it simple — users just need to know what to catch, where from, and when.
+Keep it simple — users just need to know what to catch, where from, and when.
 
 **Simplification rules:**
+- **Consolidate similar routes** — if multiple results are the same route at different times, show it once with a list of departure times. Don't repeat identical legs.
+- **Lead with a practical summary** — one plain-English sentence describing the route, like a local would explain it
 - Show platform numbers only for large train stations (Central, Town Hall, Wynyard) — users need these to find the right platform
-- Drop wharf numbers, sides (Side A/B), and stand letters — users will find these on arrival
-- Use short line names (T4, T1, Bus 333) — drop terminus descriptions like "City to Parramatta or Leppington" which confuse users going elsewhere
-- Each leg: just say where you're going and what you're catching
-- Lead with a quick recommendation if one option is clearly best
+- Always include short line codes (T4, T1, Bus 333) so users can find the right platform/stop
+- Drop wharf numbers, sides (Side A/B), stand letters, and terminus descriptions ("City to Parramatta or Leppington")
+- Only list distinct route options separately (e.g. train-only vs train+ferry)
+
+**When all results are the same route (common case):**
 
 For platforms with hyperlinks (Telegram, Discord, terminal):
 ```
-Best route: train → ferry (34 min)
+Train → Ferry (~35 min)
 
-1. Train → Ferry (34 min, depart 14:32)
-   Train from Central (Platform 21) to Circular Quay · T4 · 2 stops
-   Ferry to Manly · 18 min
-   [View on Google Maps](google_maps_url) · [TfNSW Trip Planner](transport_nsw_url)
+Take any city train from Central (T1/T4, Platform 17 or 21) to Circular Quay (2 stops), then the Manly ferry (~20 min). Runs every ~20 min.
 
-2. Train → Ferry (45 min, depart 14:35)
-   Train from Central (Platform 17) to Circular Quay · T1
-   Ferry to Manly · 22 min
-   [View on Google Maps](google_maps_url)
+Next departures: 2:05 pm, 2:26 pm, 2:47 pm
 
-3. Train → Ferry (33 min, depart 14:47)
-   Train from Central (Platform 17) to Circular Quay · T1
-   Ferry to Manly · 18 min
+[View on Google Maps](google_maps_url) · [TfNSW Trip Planner](transport_nsw_url)
 ```
 
 For platforms without hyperlinks (WhatsApp, Signal, SMS):
 ```
-Best route: train → ferry (34 min)
+Train → Ferry (~35 min)
 
-1. Train → Ferry (34 min, depart 14:32)
-   Train from Central (Platform 21) to Circular Quay · T4 · 2 stops
-   Ferry to Manly · 18 min
-   Google Maps: [url]
-   TfNSW: [url]
+Take any city train from Central (T1/T4, Platform 17 or 21) to Circular Quay (2 stops), then the Manly ferry (~20 min). Runs every ~20 min.
 
-2. Train → Ferry (45 min, depart 14:35)
-   Train from Central (Platform 17) to Circular Quay · T1
-   Ferry to Manly · 22 min
+Next departures: 2:05 pm, 2:26 pm, 2:47 pm
+
+Google Maps: [url]
+TfNSW: [url]
+```
+
+**When results have genuinely different routes:**
+
+```
+Two ways to get from Central to Parramatta:
+
+1. Direct train (~30 min)
+   T1 from Central (Platform 16) to Parramatta · 12 stops
+   Next: 2:10 pm, 2:25 pm, 2:40 pm
+
+2. Metro (~25 min)
+   Train from Central to Sydenham, then Metro from Sydenham to Parramatta
+   Next: 2:15 pm, 2:35 pm
+
+[View on Google Maps](google_maps_url) · [TfNSW Trip Planner](transport_nsw_url)
 ```
 
 ### Departures Mode
@@ -209,7 +217,7 @@ For real-time departures and delays, you can set up a free TfNSW API key in abou
 
 ### Formatting Rules
 
-- Trip mode: numbered journeys, simple legs, platform only at large train stations, drop wharf/stand details, use short line codes (T4 not "T4 Eastern Suburbs Line"), lead with a recommendation
+- Trip mode: consolidate same-route results into one block with departure times, lead with a plain-English summary, include line codes (T1/T4) and platform at large stations, only list distinct routes separately
 - Departures mode: compact time-based list, highlight delays
 - Stops mode: numbered list with transport types
 - Zero-config: show URLs as clickable links with upgrade nudge
