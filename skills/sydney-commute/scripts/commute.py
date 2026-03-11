@@ -659,6 +659,53 @@ def _transport_mode_name(product_name: str | None, product_class: int | None = N
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_stop_id(
+    client: "httpx.AsyncClient",
+    api_key: str,
+    name: str,
+) -> tuple[str, str]:
+    """Resolve a stop name to a stop ID via stop_finder.
+
+    Returns (stop_id_or_name, resolved_name). If the name is already a numeric
+    stop ID, returns it as-is. If resolution fails, returns the original name
+    so the trip API can attempt its own matching.
+    """
+    if name.isdigit():
+        return name, name
+    try:
+        resp = await client.get(
+            f"{API_BASE}/stop_finder",
+            params={
+                "outputFormat": "rapidJSON",
+                "coordOutputFormat": "EPSG:4326",
+                "type_sf": "any",
+                "name_sf": name,
+                "TfNSWSF": "true",
+            },
+            headers=_tfnsw_headers(api_key),
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            locations = resp.json().get("locations", [])
+            # Prefer stops/platforms over POIs and streets
+            for loc in locations:
+                loc_type = loc.get("type", "")
+                if loc_type in ("stop", "platform"):
+                    resolved_id = loc.get("id", name)
+                    resolved_name = loc.get("name", name)
+                    print(f"Resolved '{name}' -> {resolved_name} ({resolved_id})", file=sys.stderr)
+                    return resolved_id, resolved_name
+            # Fall back to first result if no stop type found
+            if locations:
+                resolved_id = locations[0].get("id", name)
+                resolved_name = locations[0].get("name", name)
+                print(f"Resolved '{name}' -> {resolved_name} ({resolved_id})", file=sys.stderr)
+                return resolved_id, resolved_name
+    except Exception:
+        pass
+    return name, name
+
+
 async def fetch_trip(
     client: "httpx.AsyncClient",
     api_key: str,
@@ -670,6 +717,10 @@ async def fetch_trip(
     transport_filter: str | None = None,
 ) -> dict:
     """Fetch trip planning results from TfNSW API."""
+    # Resolve stop names to IDs for reliable matching
+    origin_id, origin_name = await _resolve_stop_id(client, api_key, origin)
+    dest_id, dest_name = await _resolve_stop_id(client, api_key, destination)
+
     params = {
         "outputFormat": "rapidJSON",
         "coordOutputFormat": "EPSG:4326",
@@ -677,9 +728,9 @@ async def fetch_trip(
         "itdDate": depart_date,
         "itdTime": depart_time,
         "type_origin": "any",
-        "name_origin": origin,
+        "name_origin": origin_id,
         "type_destination": "any",
-        "name_destination": destination,
+        "name_destination": dest_id,
     }
 
     try:
@@ -1114,15 +1165,16 @@ async def main() -> None:
         print(json.dumps(result, indent=2))
         return
 
-    # Resolve location for context
+    # Resolve location for context — only needed for departures mode
+    # Trip and stops modes use explicit --from/--to, no geolocation needed
     async with httpx.AsyncClient() as client:
-        location = await location_from_args(args, client)
-
-        # Flag IP-only detection so the agent knows accuracy is limited
+        location = None
         location_confidence = "high"
-        if location and location.method in ("ip-api.com", "ip-fallback"):
-            if not (args.lat and args.lng):
-                location_confidence = "low"
+        if mode == "departures":
+            location = await location_from_args(args, client)
+            if location and location.method in ("ip-api.com", "ip-fallback"):
+                if not (args.lat and args.lng):
+                    location_confidence = "low"
 
         # Execute the appropriate mode
         if mode == "trip":
